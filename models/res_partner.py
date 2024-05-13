@@ -15,7 +15,11 @@ class ResPartner(models.Model):
 
         domain.append(("balance", "<", 0.0))
 
-        move_lines = self.env["account.move.line"].search(domain)
+        move_lines = (
+            self.env["account.move.line"]
+            .search(domain)
+            .filtered(lambda line: self._account_move_line_has_residual(line))
+        )
 
         action = self.env["ir.actions.actions"]._for_xml_id(
             "account.action_account_payments"
@@ -33,28 +37,37 @@ class ResPartner(models.Model):
 
             domain.append(("balance", "<", 0.0))
 
-            currency = self.env.company.currency_id
-
             for line in self.env["account.move.line"].search(domain):
 
-                if line.currency_id == self.env.company.currency_id:
-                    # Same foreign currency.
-                    amount = abs(line.amount_residual_currency)
-                else:
-                    # Different foreign currencies.
-                    amount = line.company_currency_id._convert(
-                        abs(line.amount_residual),
-                        currency,
-                        self.env.company,
-                        line.date,
-                    )
+                amount, is_zero = self._get_payment_amount_and_residual_zero(line)
 
-                if currency.is_zero(amount):
+                if is_zero:
                     continue
 
                 customer_credit += amount
 
             partner.credit_amount = customer_credit
+
+    def _account_move_line_has_residual(self, line):
+        _amount, is_zero = self._get_payment_amount_and_residual_zero(line)
+
+        return not is_zero
+
+    def _get_payment_amount_and_residual_zero(self, line):
+        currency = self.env.company.currency_id
+        if line.currency_id == self.env.company.currency_id:
+            # Same foreign currency.
+            amount = abs(line.amount_residual_currency)
+        else:
+            # Different foreign currencies.
+            amount = line.company_currency_id._convert(
+                abs(line.amount_residual),
+                currency,
+                self.env.company,
+                line.date,
+            )
+
+        return amount, currency.is_zero(amount)
 
     def _payment_balance_customer_domain(self):
         self.ensure_one()
